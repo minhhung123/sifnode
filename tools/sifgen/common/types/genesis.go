@@ -111,6 +111,10 @@ type CLP struct {
 	LiquidityProviders []interface{} `json:"liquidity_providers"`
 }
 
+type TokenRegistry struct {
+	AdminAccount string `json:"admin_account"`
+}
+
 type Dispensation struct {
 	DistributionRecords interface{} `json:"distribution_records"`
 	Distributions       interface{} `json:"distributions"`
@@ -388,6 +392,7 @@ type AppState struct {
 	Evidence     EvidenceState `json:"evidence"`
 	Genutil      Genutil       `json:"genutil"`
 	Crisis       Crisis        `json:"crisis"`
+	TokenRegistry TokenRegistry `json:"tokenregistry"`
 }
 
 type Genesis struct {
