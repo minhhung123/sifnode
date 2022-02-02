@@ -1,0 +1,12 @@
+{
+  "title": "Margin Pools Param Change",
+  "description": "Margin pools enabled",
+  "changes": [
+    {
+      "subspace": "margin",
+      "key": "Pools",
+      "value": ["stake","ceth", "clink", "cusdt","rowan"]
+    }
+  ],
+  "deposit": "10000000rowan"
+}
