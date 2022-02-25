@@ -136,7 +136,6 @@ var (
 		evidence.AppModuleBasic{},
 		ibc.AppModuleBasic{},
 		ibctransferoverride.AppModuleBasic{},
-
 		clp.AppModuleBasic{},
 		oracle.AppModuleBasic{},
 		ethbridge.AppModuleBasic{},
@@ -383,12 +382,14 @@ func NewSifApp(
 		keys[ibctransfertypes.StoreKey],
 		app.GetSubspace(ibctransfertypes.ModuleName),
 		app.IBCKeeper.ChannelKeeper,
+		app.IBCKeeper.ChannelKeeper,
 		&app.IBCKeeper.PortKeeper,
 		app.AccountKeeper,
 		app.BankKeeper,
 		scopedTransferKeeper,
 	)
 	transferModule := ibctransferoverride.NewAppModule(app.TransferKeeper, app.TokenRegistryKeeper, app.BankKeeper, appCodec)
+	transferIBCModule := ibctransferoverride.NewIBCModule(app.TransferKeeper, app.TokenRegistryKeeper, app.BankKeeper, appCodec)
 	app.OracleKeeper = oraclekeeper.NewKeeper(
 		appCodec,
 		keys[oracletypes.StoreKey],
@@ -412,10 +413,10 @@ func NewSifApp(
 		app.AccountKeeper,
 		app.GetSubspace(disptypes.ModuleName),
 	)
-	mockModule := ibcmock.NewAppModule(scopedIBCMockKeeper, &app.IBCKeeper.PortKeeper)
+	mockModule := ibcmock.NewIBCModule(&ibcmock.MockIBCApp{}, scopedIBCMockKeeper)
 	// Create static IBC router, add transfer route, then set and seal it
 	ibcRouter := porttypes.NewRouter()
-	ibcRouter.AddRoute(ibctransfertypes.ModuleName, transferModule)
+	ibcRouter.AddRoute(ibctransfertypes.ModuleName, transferIBCModule)
 	ibcRouter.AddRoute(ibcmock.ModuleName, mockModule)
 	app.IBCKeeper.SetRouter(ibcRouter)
 	// create evidence keeper with router
