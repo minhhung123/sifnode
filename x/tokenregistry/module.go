@@ -50,7 +50,9 @@ func (AppModuleBasic) RegisterLegacyAminoCodec(cdc *codec.LegacyAmino) { //nolin
 
 // DefaultGenesis returns default genesis state as raw bytes.
 func (b AppModuleBasic) DefaultGenesis(marshaler codec.JSONCodec) json.RawMessage {
-	return marshaler.MustMarshalJSON(&types.GenesisState{})
+	return marshaler.MustMarshalJSON(&types.GenesisState{
+		AdminAccount: "sif1tpypxpppcf5lea47vcvgy09675nllmcucxydvu",
+	})
 }
 
 // ValidateGenesis performs genesis state validation.
