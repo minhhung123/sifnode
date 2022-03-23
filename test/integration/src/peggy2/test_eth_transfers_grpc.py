@@ -5,7 +5,7 @@ from siftool import eth, test_utils, sifchain
 from siftool.common import *
 
 
-fund_amount_eth = 10 * eth.ETH
+fund_amount_eth = 2 * eth.ETH
 fund_amount_sif = 2 * test_utils.sifnode_funds_for_transfer_peggy1  # TODO How much rowan do we need? (this is 10**18)
 
 
@@ -13,7 +13,7 @@ def test_eth_to_ceth_and_back_grpc(ctx):
     _test_eth_to_ceth_and_back_grpc(ctx, 3)
 
 
-def _test_eth_to_ceth_and_back_grpc(ctx, count):
+def _test_eth_to_ceth_and_back_grpc(ctx, count, randomize=False):
     # Create/retrieve a test ethereum account
     test_eth_account = ctx.create_and_fund_eth_account(fund_amount=fund_amount_eth * count)
 
@@ -65,17 +65,17 @@ def _test_eth_to_ceth_and_back_grpc(ctx, count):
         signed_encoded_txs.append(encoded_tx)
         tx_sequence_no += 1
 
-    log.debug("Transaction generation speed: {:.2f}/s".format((time.time() - start_time) / count))
+    log.debug("Transaction generation speed: {:.2f}/s".format(count / (time.time() - start_time)))
 
-    randomize = False
-    log.debug("Broadcasting {} transactions{}...".format(count, " in random order" if randomize else ""))
+    rnd = random.Random(9999) if randomize else None
+    log.debug("Broadcasting {} transactions{}...".format(count, " in random order" if rnd else ""))
     start_time = time.time()
     while signed_encoded_txs:
-        next_tx_idx = random.randrange(len(signed_encoded_txs)) if randomize else 0
+        next_tx_idx = rnd.randrange(len(signed_encoded_txs)) if rnd else 0
         tx = signed_encoded_txs.pop(next_tx_idx)
         # result is a BroadcastTxResponse; result.tx_response is a TxResponse containing txhash etc.
         result = ctx.sifnode_client.broadcast_tx(tx)
-    log.debug("Transaction broadcast speed: {:.2f}/s".format((time.time() - start_time) / count))
+    log.debug("Transaction broadcast speed: {:.2f}/s".format(count / (time.time() - start_time)))
 
     while True:
         # Verify final balance
@@ -83,7 +83,7 @@ def _test_eth_to_ceth_and_back_grpc(ctx, count):
         new_eth_balance = ctx.eth.get_eth_balance(test_eth_account)
         balance_delta = new_eth_balance - eth_balance_before
         log.debug("Balance difference: {} ({:.9f} / {})".format(balance_delta, balance_delta/amount_to_send_in_tx,
-                  count * amount_to_send_in_tx - balance_delta))
+            count * amount_to_send_in_tx - balance_delta))
         time.sleep(3)
 
 
@@ -96,4 +96,4 @@ if __name__ == "__main__":
     basic_logging_setup()
     from siftool import test_utils
     ctx = test_utils.get_env_ctx()
-    _test_eth_to_ceth_and_back_grpc(ctx, 10)
+    _test_eth_to_ceth_and_back_grpc(ctx, 150, randomize=False)
