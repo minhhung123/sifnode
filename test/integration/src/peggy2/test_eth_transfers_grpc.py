@@ -53,45 +53,42 @@ def _test_eth_to_ceth_and_back_grpc(ctx, count):
     assert tx_sequence_no == 0, "Sequenece number should be 0 since we just created this acccount"
 
     log.debug("Generating {} transactions...".format(count))
-    signed_txs = []
     signed_encoded_txs = []
     start_time = time.time()
-    t = []
-    t.append(time.time())
     for i in range(count):
         # "generate_only" tells sifnode to print a transaction as JSON instead of signing and broadcasting it
-        _amount_to_send = amount_to_send
-        # _amount_to_send = 1000000 + 2**i
-        tx = ctx.sifnode_client.send_from_sifchain_to_ethereum(test_sif_account, test_eth_account, _amount_to_send,
+        tx = ctx.sifnode_client.send_from_sifchain_to_ethereum(test_sif_account, test_eth_account, amount_to_send,
             ctx.ceth_symbol, generate_only=True)
-        signed_tx = ctx.sifnode_client.sign_transaction(tx, test_sif_account, sequence=tx_sequence_no, account_number=account_number)
-        # signed_tx = ctx.sifnode_client.sign_transaction(tx, test_sif_account)
-        signed_txs.append(signed_tx)
+        signed_tx = ctx.sifnode_client.sign_transaction(tx, test_sif_account, sequence=tx_sequence_no,
+            account_number=account_number)
         encoded_tx = ctx.sifnode_client.encode_transaction(signed_tx)
         signed_encoded_txs.append(encoded_tx)
         tx_sequence_no += 1
-        # result = ctx.sifnode_client.broadcast_tx(encoded_tx)
 
     log.debug("Transaction generation speed: {:.2f}/s".format((time.time() - start_time) / count))
-    t.append(time.time())
 
-    log.debug("Broadcasting {} transactions...".format(count))
+    randomize = False
+    log.debug("Broadcasting {} transactions{}...".format(count, " in random order" if randomize else ""))
     start_time = time.time()
-    for tx in signed_encoded_txs:
+    while signed_encoded_txs:
+        next_tx_idx = random.randrange(len(signed_encoded_txs)) if randomize else 0
+        tx = signed_encoded_txs.pop(next_tx_idx)
         # result is a BroadcastTxResponse; result.tx_response is a TxResponse containing txhash etc.
         result = ctx.sifnode_client.broadcast_tx(tx)
-        # time.sleep(30)
-        # pass
     log.debug("Transaction broadcast speed: {:.2f}/s".format((time.time() - start_time) / count))
-    t.append(time.time())
 
-    for i in range(1000):
+    while True:
         # Verify final balance
         # new_eth_balance = ctx.wait_for_eth_balance_change(test_eth_account, eth_balance_before)
         new_eth_balance = ctx.eth.get_eth_balance(test_eth_account)
         balance_delta = new_eth_balance - eth_balance_before
-        log.debug("Balance difference: {} ({:.9f})".format(balance_delta, balance_delta/amount_to_send_in_tx))
+        log.debug("Balance difference: {} ({:.9f} / {})".format(balance_delta, balance_delta/amount_to_send_in_tx,
+                  count * amount_to_send_in_tx - balance_delta))
         time.sleep(3)
+
+
+def _test_setup(ctx):
+    pass
 
 
 # Enable running directly, i.e. without pytest
@@ -99,4 +96,4 @@ if __name__ == "__main__":
     basic_logging_setup()
     from siftool import test_utils
     ctx = test_utils.get_env_ctx()
-    _test_eth_to_ceth_and_back_grpc(ctx, 100)
+    _test_eth_to_ceth_and_back_grpc(ctx, 10)
