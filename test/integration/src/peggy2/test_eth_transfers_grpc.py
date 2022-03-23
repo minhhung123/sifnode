@@ -6,7 +6,7 @@ from siftool.common import *
 
 
 fund_amount_eth = 10 * eth.ETH
-fund_amount_sif = 10 * test_utils.sifnode_funds_for_transfer_peggy1  # TODO How much rowan do we need? (this is 10**18)
+fund_amount_sif = 2 * test_utils.sifnode_funds_for_transfer_peggy1  # TODO How much rowan do we need? (this is 10**18)
 
 
 def test_eth_to_ceth_and_back_grpc(ctx):
@@ -43,7 +43,14 @@ def _test_eth_to_ceth_and_back_grpc(ctx, count):
     eth_balance_before = ctx.eth.get_eth_balance(test_eth_account)
     amount_to_send = amount_to_send_in_tx - ctx.eth.cross_chain_fee_base * ctx.eth.cross_chain_burn_fee
 
-    tx_sequence_no = 0  # We're starting with a new account that has no trasactions yet
+    # chain_id, acccount_number and sequence are part of signature bytes and serve for replay protection.
+    # chain_id and account_number do not change for the lifetime of chain, whereas sequence needs to be incremented for
+    # every transaction.
+    # See https://github.com/cosmos/cosmos-sdk/issues/6966
+    account = ctx.sifnode_client.query_account(test_sif_account)
+    tx_sequence_no = int(account["sequence"])
+    account_number = int(account["account_number"])
+    assert tx_sequence_no == 0, "Sequenece number should be 0 since we just created this acccount"
 
     log.debug("Generating {} transactions...".format(count))
     signed_txs = []
@@ -54,14 +61,17 @@ def _test_eth_to_ceth_and_back_grpc(ctx, count):
     for i in range(count):
         # "generate_only" tells sifnode to print a transaction as JSON instead of signing and broadcasting it
         _amount_to_send = amount_to_send
-        _amount_to_send = 1000000 + i * 1000
+        # _amount_to_send = 1000000 + 2**i
         tx = ctx.sifnode_client.send_from_sifchain_to_ethereum(test_sif_account, test_eth_account, _amount_to_send,
             ctx.ceth_symbol, generate_only=True)
-        signed_tx = ctx.sifnode_client.sign_transaction(tx, test_sif_account, sequence=tx_sequence_no)
+        signed_tx = ctx.sifnode_client.sign_transaction(tx, test_sif_account, sequence=tx_sequence_no, account_number=account_number)
+        # signed_tx = ctx.sifnode_client.sign_transaction(tx, test_sif_account)
         signed_txs.append(signed_tx)
         encoded_tx = ctx.sifnode_client.encode_transaction(signed_tx)
         signed_encoded_txs.append(encoded_tx)
         tx_sequence_no += 1
+        # result = ctx.sifnode_client.broadcast_tx(encoded_tx)
+
     log.debug("Transaction generation speed: {:.2f}/s".format((time.time() - start_time) / count))
     t.append(time.time())
 
@@ -70,7 +80,8 @@ def _test_eth_to_ceth_and_back_grpc(ctx, count):
     for tx in signed_encoded_txs:
         # result is a BroadcastTxResponse; result.tx_response is a TxResponse containing txhash etc.
         result = ctx.sifnode_client.broadcast_tx(tx)
-        time.sleep(30)
+        # time.sleep(30)
+        # pass
     log.debug("Transaction broadcast speed: {:.2f}/s".format((time.time() - start_time) / count))
     t.append(time.time())
 
@@ -88,4 +99,4 @@ if __name__ == "__main__":
     basic_logging_setup()
     from siftool import test_utils
     ctx = test_utils.get_env_ctx()
-    _test_eth_to_ceth_and_back_grpc(ctx, 3)
+    _test_eth_to_ceth_and_back_grpc(ctx, 100)
