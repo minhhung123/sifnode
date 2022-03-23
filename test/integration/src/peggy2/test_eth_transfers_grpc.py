@@ -74,7 +74,6 @@ def _test_eth_to_ceth_and_back_grpc(ctx, count, randomize=False):
     start_time = time.time()
     while signed_encoded_txs:
         next_tx_idx = rnd.randrange(len(signed_encoded_txs)) if rnd else 0
-        log.debug("Next index: {}".format(next_tx_idx))
         tx = signed_encoded_txs.pop(next_tx_idx)
         # result is a BroadcastTxResponse; result.tx_response is a TxResponse containing txhash etc.
         result = ctx.sifnode_client.broadcast_tx(tx)
@@ -82,7 +81,6 @@ def _test_eth_to_ceth_and_back_grpc(ctx, count, randomize=False):
 
     while True:
         # Verify final balance
-        # new_eth_balance = ctx.wait_for_eth_balance_change(test_eth_account, eth_balance_before)
         new_eth_balance = ctx.eth.get_eth_balance(test_eth_account)
         balance_delta = new_eth_balance - eth_balance_before
         still_to_go = count * amount_per_tx - balance_delta
@@ -100,7 +98,7 @@ def _test_eth_to_ceth_and_back_grpc(ctx, count, randomize=False):
     assert sif_balance_before["rowan"] - sif_balance_after["rowan"] == 100000 * count
     assert sif_balance_before[ctx.ceth_symbol] - sif_balance_after[ctx.ceth_symbol] == (amount_per_tx + 1) * count
     assert eth_balance_after - eth_balance_before = count * amount_per_tx
-    
+
 
 # Enable running directly, i.e. without pytest
 if __name__ == "__main__":
