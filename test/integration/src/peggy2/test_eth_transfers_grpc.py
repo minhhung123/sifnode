@@ -83,9 +83,12 @@ def _test_eth_to_ceth_and_back_grpc(ctx, count, randomize=False):
         # Verify final balance
         new_eth_balance = ctx.eth.get_eth_balance(test_eth_account)
         balance_delta = new_eth_balance - eth_balance_before
-        still_to_go = count * amount_per_tx - balance_delta
-        log.debug("Balance difference: {} ({:.9f} / {})".format(balance_delta, balance_delta/amount_per_tx,
-            still_to_go))
+        total = count * amount_per_tx
+        still_to_go = total - balance_delta
+        percentage = balance_delta / total * 100
+        txns_done = balance_delta / amount_per_tx
+        log.debug("Balance difference: {} / {} ({:.9f} txns done, {:0.9f}%)".format(balance_delta, total, txns_done,
+            percentage))
         if still_to_go == 0:
             break
         time.sleep(3)
@@ -97,7 +100,7 @@ def _test_eth_to_ceth_and_back_grpc(ctx, count, randomize=False):
     # Change of test_Eth_account per transaction: amount_per_tx ETH
     assert sif_balance_before["rowan"] - sif_balance_after["rowan"] == 100000 * count
     assert sif_balance_before[ctx.ceth_symbol] - sif_balance_after[ctx.ceth_symbol] == (amount_per_tx + 1) * count
-    assert eth_balance_after - eth_balance_before = count * amount_per_tx
+    assert eth_balance_after - eth_balance_before == count * amount_per_tx
 
 
 # Enable running directly, i.e. without pytest
