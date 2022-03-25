@@ -115,17 +115,17 @@ def _test_eth_to_ceth_and_back_grpc(ctx, count, randomize=False):
         for req in reqs:
             tx_stub.BroadcastTx(req)
 
-    import cosmos.tx.v1beta1.service_pb2
-    import cosmos.tx.v1beta1.service_pb2_grpc
+    import cosmos.tx.v1beta1.service_pb2 as cosmos_tx
+    import cosmos.tx.v1beta1.service_pb2_grpc as cosmos_tx_grpc
     threads = []
     channels = []
-    broadcast_mode = cosmos.tx.v1beta1.service_pb2.BROADCAST_MODE_ASYNC
+    broadcast_mode = cosmos_tx.BROADCAST_MODE_ASYNC
     for i in range(n_sif):
         sif_acct = sif_accts[i]
         channel = ctx.sifnode_client.open_grpc_channel()
         channels.append(channel)
-        tx_stub = cosmos.tx.v1beta1.service_pb2_grpc.ServiceStub(channel)
-        reqs = [cosmos.tx.v1beta1.service_pb2.BroadcastTxRequest(tx_bytes=tx_bytes, mode=broadcast_mode) for tx_bytes in signed_encoded_txns[i]]
+        tx_stub = cosmos_tx_grpc.ServiceStub(channel)
+        reqs = [cosmos_tx.BroadcastTxRequest(tx_bytes=tx_bytes, mode=broadcast_mode) for tx_bytes in signed_encoded_txns[i]]
         threads.append(threading.Thread(target=sif_acct_sender_fn, args=(sif_acct, tx_stub, reqs)))
 
     eth_balances_before = [ctx.eth.get_eth_balance(eth_acct) for eth_acct in eth_accts]
