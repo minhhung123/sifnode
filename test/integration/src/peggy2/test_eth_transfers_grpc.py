@@ -2,7 +2,8 @@ import time
 import threading
 
 import siftool_path
-from siftool import eth, test_utils, sifchain, cosmos
+from siftool import eth, test_utils, sifchain
+import siftool.cosmos  # gPRC generated stubs use "cosmos" namespace
 from siftool.common import *
 
 
@@ -10,7 +11,7 @@ fund_amount_eth = 2 * eth.ETH
 fund_amount_sif = 2 * test_utils.sifnode_funds_for_transfer_peggy1  # TODO How much rowan do we need? (this is 10**18)
 
 # Fees for "ethbridge burn" transactions. Determined experimentally
-sif_tx_burn_fee_in_rowan = 1000000
+sif_tx_burn_fee_in_rowan = 100000
 sif_tx_burn_fee_in_ceth = 1
 
 # Fees for sifchain -> sifchain transactions, paid by the sender.
@@ -34,7 +35,7 @@ def _test_eth_to_ceth_and_back_grpc(ctx, count, randomize=False):
         [10, 20, 30],
     ]
 
-    transfer_table = [[5] * 3] * 4
+    transfer_table = [[1] * 3] * 4
 
     amount_per_tx = 123456 * eth.GWEI
 
@@ -50,7 +51,7 @@ def _test_eth_to_ceth_and_back_grpc(ctx, count, randomize=False):
     # Each sif account needs sif_tx_burn_fee_in_rowan * rowan + sif_tx_burn_fee_in_ceth ceth for every transaction.
     sif_acct_funds = [{
         rowan: sif_tx_burn_fee_in_rowan * n,
-        ctx.ceth_symbol: sif_tx_burn_fee_in_ceth * n
+        # ctx.ceth_symbol: sif_tx_burn_fee_in_ceth * n
     } for n in sum_sif]
     sif_accts = [ctx.create_sifchain_addr(fund_amounts=f) for f in sif_acct_funds]
 
@@ -77,7 +78,7 @@ def _test_eth_to_ceth_and_back_grpc(ctx, count, randomize=False):
     for i, sif_acct in enumerate(sif_accts):
         b_sif_acct_before = ctx.get_sifchain_balance(sif_acct)
         b_disp_acct_before = ctx.get_sifchain_balance(dispensation_sif_acct)
-        amount_ceth = sum_sif[i] * amount_per_tx
+        amount_ceth = sum_sif[i] * (amount_per_tx + sif_tx_burn_fee_in_ceth)
         ctx.send_from_sifchain_to_sifchain(dispensation_sif_acct, sif_acct, {ctx.ceth_symbol: amount_ceth})
         b_sif_acct_after = ctx.wait_for_sif_balance_change(sif_acct, b_sif_acct_before)
         b_disp_acct_after = ctx.get_sifchain_balance(dispensation_sif_acct)
@@ -86,6 +87,7 @@ def _test_eth_to_ceth_and_back_grpc(ctx, count, randomize=False):
     sif_acct_infos = [ctx.sifnode_client.query_account(sif_acct) for sif_acct in sif_accts]
 
     # Generate transactions
+    start_time = time.time()
     signed_encoded_txns = []
     for i in range(n_sif):
         sif_acct = sif_accts[i]
@@ -105,8 +107,9 @@ def _test_eth_to_ceth_and_back_grpc(ctx, count, randomize=False):
                 txn_list.append(encoded_tx)
                 sequence += 1
         signed_encoded_txns.append(txn_list)
+    log.debug("Transaction generation speed: {:.2f}/s".format(sum_all / (time.time() - start_time)))
 
-    # Prepare sending threads (one for each account in sif_accts)
+    # Prepare transactions as gRPC messages and sending threads (one thread for each sif_accts)
     def sif_acct_sender_fn(sif_acct, tx_stub, reqs):
         log.debug("Broadcasting {} txns from {}...".format(len(reqs), sif_acct))
         for req in reqs:
@@ -123,17 +126,49 @@ def _test_eth_to_ceth_and_back_grpc(ctx, count, randomize=False):
         channels.append(channel)
         tx_stub = cosmos.tx.v1beta1.service_pb2_grpc.ServiceStub(channel)
         reqs = [cosmos.tx.v1beta1.service_pb2.BroadcastTxRequest(tx_bytes=tx_bytes, mode=broadcast_mode) for tx_bytes in signed_encoded_txns[i]]
-        threads.append(threading.Thread(target=sif_acct_sender_thread_fn, args=(sif_acct, tx_stub, reqs)))
+        threads.append(threading.Thread(target=sif_acct_sender_fn, args=(sif_acct, tx_stub, reqs)))
 
+    eth_balances_before = [ctx.eth.get_eth_balance(eth_acct) for eth_acct in eth_accts]
+
+    # Broadcast transactions
+    start_time = time.time()
     for t in threads:
         t.start()
 
     for t in threads:
         t.join()
 
+    log.debug("Transaction broadcast speed: {:.2f}/s".format(sum_all / (time.time() - start_time)))
+
     for c in channels:
         c.close()
 
+    start_time = time.time()
+    while True:
+        eth_balances = [ctx.eth.get_eth_balance(eth_acct) for eth_acct in eth_accts]
+        balance_delta = sum([eth_balances[i] - eth_balances_before[i] for i in range(n_eth)])
+        total = sum_all * amount_per_tx
+        still_to_go = total - balance_delta
+        pct_done = balance_delta / total * 100
+        txns_done = balance_delta / amount_per_tx
+        log.debug("Balance difference: {} / {} ({:.9f} txns done, {:0.9f}%)".format(balance_delta, total, txns_done,
+            pct_done))
+        if still_to_go == 0:
+            break
+        if time.time() - start_time > 3600:
+            raise Exception("Timeout")
+        time.sleep(3)
+
+    for sif_acct in sif_accts:
+        actual_balance = ctx.get_sifchain_balance(sif_acct)
+        assert siftool.cosmos.balance_zero(actual_balance)
+
+    for i, eth_acct in enumerate(eth_accts):
+        expected_balance = sum_eth[i] * amount_per_tx
+        actual_balance = ctx.eth.get_eth_balance(eth_acct)
+        assert expected_balance == actual_balance
+
+    log.debug("Done")
     test_sif_account_initial_balance = ctx.get_sifchain_balance(test_sif_account)
 
     # Send from ethereum to sifchain by locking
