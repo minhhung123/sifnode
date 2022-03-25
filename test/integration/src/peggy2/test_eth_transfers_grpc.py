@@ -1,4 +1,5 @@
 import time
+import threading
 
 import siftool_path
 from siftool import eth, test_utils, sifchain, cosmos
@@ -32,6 +33,8 @@ def _test_eth_to_ceth_and_back_grpc(ctx, count, randomize=False):
         [100, 100, 100],
         [10, 20, 30],
     ]
+
+    transfer_table = [[5] * 3] * 4
 
     amount_per_tx = 123456 * eth.GWEI
 
@@ -67,16 +70,69 @@ def _test_eth_to_ceth_and_back_grpc(ctx, count, randomize=False):
     # Transfer ETH from operator to dispensation_sif_acct (lock)
     old_balances = ctx.get_sifchain_balance(dispensation_sif_acct)
     ctx.bridge_bank_lock_eth(ctx.operator, dispensation_sif_acct, sum_all * (amount_per_tx + sif_tx_burn_fee_in_ceth))
+    ctx.advance_blocks()
     new_balances = ctx.wait_for_sif_balance_change(dispensation_sif_acct, old_balances)
 
     # Dispense from sif_dispensation_acct to sif_accts
     for i, sif_acct in enumerate(sif_accts):
-        b0 = ctx.get_sifchain_balance(sif_acct)
-        c0 = ctx.get_sifchain_balance(dispensation_sif_acct)
+        b_sif_acct_before = ctx.get_sifchain_balance(sif_acct)
+        b_disp_acct_before = ctx.get_sifchain_balance(dispensation_sif_acct)
         amount_ceth = sum_sif[i] * amount_per_tx
         ctx.send_from_sifchain_to_sifchain(dispensation_sif_acct, sif_acct, {ctx.ceth_symbol: amount_ceth})
-        b1 = ctx.wait_for_sif_balance_change(sif_acct, b0)
-        c1 = ctx.get_sifchain_balance(dispensation_sif_acct)
+        b_sif_acct_after = ctx.wait_for_sif_balance_change(sif_acct, b_sif_acct_before)
+        b_disp_acct_after = ctx.get_sifchain_balance(dispensation_sif_acct)
+
+    # Get sif account info (for account_number and sequence)
+    sif_acct_infos = [ctx.sifnode_client.query_account(sif_acct) for sif_acct in sif_accts]
+
+    # Generate transactions
+    signed_encoded_txns = []
+    for i in range(n_sif):
+        sif_acct = sif_accts[i]
+        account_number = int(sif_acct_infos[i]["account_number"])
+        sequence = int(sif_acct_infos[i]["sequence"])
+        txn_list = []
+        for j in range(n_eth):
+            txn_cnt = transfer_table[i][j]
+            eth_acct = eth_accts[j]
+            log.debug("Generating {} txns from {} to {}...".format(txn_cnt, sif_acct, eth_acct))
+            for k in range(txn_cnt):
+                tx = ctx.sifnode_client.send_from_sifchain_to_ethereum(sif_acct, eth_acct, amount_per_tx,
+                    ctx.ceth_symbol, generate_only=True)
+                signed_tx = ctx.sifnode_client.sign_transaction(tx, sif_acct, sequence=sequence,
+                    account_number=account_number)
+                encoded_tx = ctx.sifnode_client.encode_transaction(signed_tx)
+                txn_list.append(encoded_tx)
+                sequence += 1
+        signed_encoded_txns.append(txn_list)
+
+    # Prepare sending threads (one for each account in sif_accts)
+    def sif_acct_sender_thread_fn(sif_acct, tx_stub, reqs):
+        log.debug("Broadcasting {} txns from {}...".format(len(reqs), sif_acct))
+        for req in reqs:
+            tx_stub.BroadcastTx(req)
+
+    import cosmos.tx.v1beta1.service_pb2
+    import cosmos.tx.v1beta1.service_pb2_grpc
+    threads = []
+    channels = []
+    broadcast_mode = cosmos.tx.v1beta1.service_pb2.BROADCAST_MODE_ASYNC
+    for i in range(n_sif):
+        sif_acct = sif_accts[i]
+        channel = ctx.sifnode_client.open_grpc_channel()
+        channels.append(channel)
+        tx_stub = cosmos.tx.v1beta1.service_pb2_grpc.ServiceStub(channel)
+        reqs = [cosmos.tx.v1beta1.service_pb2.BroadcastTxRequest(tx_bytes=tx_bytes, mode=broadcast_mode) for tx_bytes in signed_encoded_txns[i]]
+        threads.append(threading.Thread(target=sif_acct_sender_thread_fn, args=(sif_acct, tx_stub, reqs)))
+
+    for t in threads:
+        t.start()
+
+    for t in threads:
+        t.join()
+
+    for c in channels:
+        c.close()
 
     test_sif_account_initial_balance = ctx.get_sifchain_balance(test_sif_account)
 
