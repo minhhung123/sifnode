@@ -107,7 +107,7 @@ def _test_eth_to_ceth_and_back_grpc(ctx, count, randomize=False):
         signed_encoded_txns.append(txn_list)
 
     # Prepare sending threads (one for each account in sif_accts)
-    def sif_acct_sender_thread_fn(sif_acct, tx_stub, reqs):
+    def sif_acct_sender_fn(sif_acct, tx_stub, reqs):
         log.debug("Broadcasting {} txns from {}...".format(len(reqs), sif_acct))
         for req in reqs:
             tx_stub.BroadcastTx(req)
