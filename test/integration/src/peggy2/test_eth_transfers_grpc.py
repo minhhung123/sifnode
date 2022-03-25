@@ -1,16 +1,21 @@
 import time
 
 import siftool_path
-from siftool import eth, test_utils, sifchain
+from siftool import eth, test_utils, sifchain, cosmos
 from siftool.common import *
 
 
 fund_amount_eth = 2 * eth.ETH
 fund_amount_sif = 2 * test_utils.sifnode_funds_for_transfer_peggy1  # TODO How much rowan do we need? (this is 10**18)
 
-# These fees are determined experimentally
-sif_tx_fee_in_rowan = 1000000
-sif_tx_fee_in_ceth = 1
+# Fees for "ethbridge burn" transactions. Determined experimentally
+sif_tx_burn_fee_in_rowan = 1000000
+sif_tx_burn_fee_in_ceth = 1
+
+# Fees for sifchain -> sifchain transactions, paid by the sender.
+sif_tx_fee_in_rowan = 1 * 10**17
+
+rowan = "rowan"
 
 
 def test_eth_to_ceth_and_back_grpc(ctx):
@@ -28,34 +33,54 @@ def _test_eth_to_ceth_and_back_grpc(ctx, count, randomize=False):
         [10, 20, 30],
     ]
 
+    amount_per_tx = 123456 * eth.GWEI
+
     n_sif = len(transfer_table)
     assert n_sif > 0
     n_eth = len(transfer_table[0])
     assert all([len(row) == n_eth for row in transfer_table]), "transfer_table has to be rectangular"
     sum_sif = [sum(x) for x in transfer_table]
     sum_eth = [sum([x[i] for x in transfer_table]) for i in range(n_eth)]
+    sum_all = sum([sum(x) for x in transfer_table])
 
-    # Create test sif accounts.
-    # Every sif account needs sif_tx_fee_in_rowan * rowan + sif_tx_fee_in_ceth ceth for every transaction.
+    # Create n_sif test sif accounts.
+    # Each sif account needs sif_tx_burn_fee_in_rowan * rowan + sif_tx_burn_fee_in_ceth ceth for every transaction.
     sif_acct_funds = [{
-        "rowan": sif_tx_fee_in_rowan * n,
-        ctx.ceth_symbol: sif_tx_fee_in_ceth * n
+        rowan: sif_tx_burn_fee_in_rowan * n,
+        ctx.ceth_symbol: sif_tx_burn_fee_in_ceth * n
     } for n in sum_sif]
     sif_accts = [ctx.create_sifchain_addr(fund_amounts=f) for f in sif_acct_funds]
 
+    # Create a test ethereum accounts. They are just receiving ETH, so we don't need to fund them.
     eth_accts = [ctx.create_and_fund_eth_account() for _ in range(n_eth)]
 
-    # Create/retrieve a test ethereum account
-    test_eth_account = ctx.create_and_fund_eth_account(fund_amount=fund_amount_eth * count)
+    # Get initial balances
+    sif_balances_initial = [ctx.get_sifchain_balance(sif_acct) for sif_acct in sif_accts]
+    eth_balances_initial = [ctx.eth.get_eth_balance(eth_acct) for eth_acct in eth_accts]
+    assert all([b == 0 for b in eth_balances_initial])  # Might be non-zero if we're recycling accounts
 
-    # create/retrieve a test sifchain account
-    test_sif_account = ctx.create_sifchain_addr(fund_amounts=fund_amount_sif)
+    # Create a dispensation sif account that will receive all locked ETH and dispense it to each sif account
+    # (we do this in one transaction because lock transactions take a lot of time).
+    # Dispensation account needs rowan for distributing ceth to sif_accts.
+    dispensation_sif_acct = ctx.create_sifchain_addr(fund_amounts={rowan: n_sif * sif_tx_fee_in_rowan})
 
-    # Verify initial balance
+    # Transfer ETH from operator to dispensation_sif_acct (lock)
+    old_balances = ctx.get_sifchain_balance(dispensation_sif_acct)
+    ctx.bridge_bank_lock_eth(ctx.operator, dispensation_sif_acct, sum_all * (amount_per_tx + sif_tx_burn_fee_in_ceth))
+    new_balances = ctx.wait_for_sif_balance_change(dispensation_sif_acct, old_balances)
+
+    # Dispense from sif_dispensation_acct to sif_accts
+    for i, sif_acct in enumerate(sif_accts):
+        b0 = ctx.get_sifchain_balance(sif_acct)
+        c0 = ctx.get_sifchain_balance(dispensation_sif_acct)
+        amount_ceth = sum_sif[i] * amount_per_tx
+        ctx.send_from_sifchain_to_sifchain(dispensation_sif_acct, sif_acct, {ctx.ceth_symbol: amount_ceth})
+        b1 = ctx.wait_for_sif_balance_change(sif_acct, b0)
+        c1 = ctx.get_sifchain_balance(dispensation_sif_acct)
+
     test_sif_account_initial_balance = ctx.get_sifchain_balance(test_sif_account)
 
     # Send from ethereum to sifchain by locking
-    amount_per_tx = 123456 * eth.GWEI
     total_amount_to_send = amount_per_tx * count
     assert total_amount_to_send < fund_amount_eth
 
@@ -127,10 +152,10 @@ def _test_eth_to_ceth_and_back_grpc(ctx, count, randomize=False):
     sif_balance_after = ctx.get_sifchain_balance(test_sif_account)
     eth_balance_after = ctx.eth.get_eth_balance(test_eth_account)
 
-    # Change of test_sif_account per transaction: - sif_tx_fee_in_rowan rowan - (amount_per_tx + sif_tx_fee_in_ceth) ceth
+    # Change of test_sif_account per transaction: - sif_tx_burn_fee_in_rowan rowan - (amount_per_tx + sif_tx_burn_fee_in_ceth) ceth
     # Change of test_Eth_account per transaction: amount_per_tx ETH
-    assert sif_balance_before["rowan"] - sif_balance_after["rowan"] == sif_tx_fee_in_rowan * count
-    assert sif_balance_before[ctx.ceth_symbol] - sif_balance_after[ctx.ceth_symbol] == (amount_per_tx + sif_tx_fee_in_ceth) * count
+    assert sif_balance_before[rowan] - sif_balance_after[rowan] == sif_tx_burn_fee_in_rowan * count
+    assert sif_balance_before[ctx.ceth_symbol] - sif_balance_after[ctx.ceth_symbol] == (amount_per_tx + sif_tx_burn_fee_in_ceth) * count
     assert eth_balance_after - eth_balance_before == count * amount_per_tx
 
 
