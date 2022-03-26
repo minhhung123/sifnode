@@ -11,11 +11,13 @@ import cosmos.tx.v1beta1.service_pb2_grpc as cosmos_tx_grpc
 
 
 # Fees for "ethbridge burn" transactions. Determined experimentally
-sif_tx_burn_fee_in_rowan = 100000
+sif_tx_burn_fee_in_rowan = 100000 * 10000
 sif_tx_burn_fee_in_ceth = 1
 
 # Fees for sifchain -> sifchain transactions, paid by the sender.
-sif_tx_fee_in_rowan = 1 * 10**17 * 100
+# Normally, the fee is 1 * 10**17, but after sending many transaction the fees rise significantly, so we use a factor
+# of 200 since we have unlimited supply of rowan.
+sif_tx_fee_in_rowan = 1 * 10**17 * 10000
 
 rowan = "rowan"
 
@@ -130,6 +132,7 @@ def _test_eth_to_ceth_and_back_grpc(ctx, amount_per_tx, transfer_table, randomiz
 
     # Get initial balances
     eth_balances_before = [ctx.eth.get_eth_balance(eth_acct) for eth_acct in eth_accts]
+    sif_balances_before = [ctx.get_sifchain_balance(x) for x in sif_accts]
 
     # Broadcast transactions
     start_time = time.time()
@@ -159,23 +162,25 @@ def _test_eth_to_ceth_and_back_grpc(ctx, amount_per_tx, transfer_table, randomiz
         pct_done = balance_delta / total * 100
         txns_done = balance_delta / amount_per_tx
         time_elapsed = time.time() - start_time
-        log.debug("Test progress: {} / {} ({:.9f} txns done, {:.9f}%, {:.2f} avg tps)".format(balance_delta, total,
+        log.debug("Test progress: {} / {} ({:.9f} txns done, {:.2f}%, {:.4f} avg tps)".format(balance_delta, total,
             txns_done, pct_done, (txns_done / time_elapsed if time_elapsed > 0 else 0)))
         if still_to_go == 0:
             break
         if (last_change is None) or (balance_delta != last_change):
             last_change_time = now
             last_change = balance_delta
+            log.debug("sif_accts balances: {}".format(repr([ctx.get_sifchain_balance(x) for x in sif_accts])))
         if now - last_change_time > last_change_timeout:
             raise Exception("Last change timeout exceeded")
-        if now - start_time > cumulative_timeout:
+        elif now - start_time > cumulative_timeout:
             raise Exception("Cumulative timeout exceeded")
         time.sleep(3)
 
-    # Verify final sif balances
+    # Verify final sif balances. There should be no ceth left. There is some rowan left since we oversupplied it.
     for sif_acct in sif_accts:
         actual_balance = ctx.get_sifchain_balance(sif_acct)
         # assert siftool.cosmos.balance_zero(actual_balance)
+        assert actual_balance.get(ctx.ceth_symbol, 0) == 0
 
     # Verify final eth balances
     for i, eth_acct in enumerate(eth_accts):
@@ -201,3 +206,13 @@ if __name__ == "__main__":
     from siftool import test_utils
     ctx = test_utils.get_env_ctx()
     test_eth_to_ceth_and_back_grpc(ctx)
+
+
+# python (probably from grpc):
+# E0326 11:41:27.125006742  636480 fork_posix.cc:70]           Fork support is only compatible with the epoll1 and poll polling strategies
+# Maybe: https://github.com/grpc/grpc/issues/29044
+
+
+# sifnoded.log:
+# {"level":"debug","module":"mempool","height":348,"res":{"check_tx":{"code":0,"data":"","log":"[]","info":"","gas_wanted":"1000000000000000000","gas_used":"51653","events":[],"codespace":""}},"total":1,"tx":"\ufffd\ufffd\u0013\ufffd3\ufffd\u0014\ufffd\ufffd\ufffd\u001e\u0016R\ufffd\ufffd\ufffd,q$Z\u0006\tN0\ufffd萈\ufffdV\ufffdy","time":"2022-03-26T10:07:48+01:00","message":"added good transaction"}
+# {"level":"debug","module":"mempool","err":null,"peerID":"","res":{"check_tx":{"code":5,"data":null,"log":"0rowan is smaller than 500000000000000000rowan: insufficient funds: insufficient funds","info":"","gas_wanted":"1000000000000000000","gas_used":"19773","events":[],"codespace":"sdk"}},"tx":"H\ufffd\ufffdx\ufffd,4\u0004\ufffd\u001fWSnn\ufffd\ufffd\ufffdp\ufffd\ufffdg\ufffdGں^\ufffd\ufffd*i\ufffdX","time":"2022-03-26T10:09:26+01:00","message":"rejected bad transaction"}
