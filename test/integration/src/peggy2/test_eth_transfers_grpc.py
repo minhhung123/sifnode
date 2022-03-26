@@ -10,14 +10,28 @@ import cosmos.tx.v1beta1.service_pb2 as cosmos_tx
 import cosmos.tx.v1beta1.service_pb2_grpc as cosmos_tx_grpc
 
 
+# How to use:
+# test/integration/framework/siftool generate-python-protobuf-stubs
+# ... (be patient) ...
+# In separate window: test/integration/framework/siftool run-env
+# test/integration/framework/venv/bin/python3 test/integration/src/peggy2/test_eth_transfers_grpc.py
+
+# Current issues:
+# python (probably from grpc):
+# E0326 11:41:27.125006742  636480 fork_posix.cc:70]           Fork support is only compatible with the epoll1 and poll polling strategies
+# Maybe: https://github.com/grpc/grpc/issues/29044
+
+# sifnoded.log:
+# {"level":"debug","module":"mempool","height":348,"res":{"check_tx":{"code":0,"data":"","log":"[]","info":"","gas_wanted":"1000000000000000000","gas_used":"51653","events":[],"codespace":""}},"total":1,"tx":"\ufffd\ufffd\u0013\ufffd3\ufffd\u0014\ufffd\ufffd\ufffd\u001e\u0016R\ufffd\ufffd\ufffd,q$Z\u0006\tN0\ufffd萈\ufffdV\ufffdy","time":"2022-03-26T10:07:48+01:00","message":"added good transaction"}
+# {"level":"debug","module":"mempool","err":null,"peerID":"","res":{"check_tx":{"code":5,"data":null,"log":"0rowan is smaller than 500000000000000000rowan: insufficient funds: insufficient funds","info":"","gas_wanted":"1000000000000000000","gas_used":"19773","events":[],"codespace":"sdk"}},"tx":"H\ufffd\ufffdx\ufffd,4\u0004\ufffd\u001fWSnn\ufffd\ufffd\ufffdp\ufffd\ufffdg\ufffdGں^\ufffd\ufffd*i\ufffdX","time":"2022-03-26T10:09:26+01:00","message":"rejected bad transaction"}
+
+
 # Fees for "ethbridge burn" transactions. Determined experimentally
-sif_tx_burn_fee_in_rowan = 100000 * 10000
+sif_tx_burn_fee_in_rowan = 100000
 sif_tx_burn_fee_in_ceth = 1
 
 # Fees for sifchain -> sifchain transactions, paid by the sender.
-# Normally, the fee is 1 * 10**17, but after sending many transaction the fees rise significantly, so we use a factor
-# of 200 since we have unlimited supply of rowan.
-sif_tx_fee_in_rowan = 1 * 10**17 * 10000
+sif_tx_fee_in_rowan = 1 * 10**17
 
 rowan = "rowan"
 
@@ -100,15 +114,23 @@ def _test_eth_to_ceth_and_back_grpc(ctx, amount_per_tx, transfer_table, randomiz
         choice_histogram = transfer_table[i].copy()
         ordereed_eth_accounts = [eth_accts[choose_from(choice_histogram, rnd=randomize)] for _ in range(sum_sif[i])]
         txn_list = []
+        rowan_before = None
+        fee_histogram = {}
         for eth_acct in ordereed_eth_accounts:
             tx = ctx.sifnode_client.send_from_sifchain_to_ethereum(sif_acct, eth_acct, amount_per_tx,
                 ctx.ceth_symbol, generate_only=True)
             signed_tx = ctx.sifnode_client.sign_transaction(tx, sif_acct, sequence=sequence,
                 account_number=account_number)
             encoded_tx = ctx.sifnode_client.encode_transaction(signed_tx)
+            rowan_after = ctx.get_sifchain_balance(sif_acct)[rowan]
+            if rowan_before is not None:
+                rowan_fee = rowan_after - rowan_before
+                fee_histogram[rowan_fee] = fee_histogram.get(rowan_fee, 0) + 1
+            rowan_before = rowan_after
             txn_list.append(encoded_tx)
             sequence += 1
         signed_encoded_txns.append(txn_list)
+        log.debug("Fee histogram: {}".format(repr(fee_histogram)))
     log.debug("Transaction generation speed: {:.2f}/s".format(sum_all / (time.time() - start_time)))
 
     # Per-thread function for broadcasting transactions
@@ -130,9 +152,10 @@ def _test_eth_to_ceth_and_back_grpc(ctx, amount_per_tx, transfer_table, randomiz
         reqs = [cosmos_tx.BroadcastTxRequest(tx_bytes=tx_bytes, mode=broadcast_mode) for tx_bytes in signed_encoded_txns[i]]
         threads.append(threading.Thread(target=sif_acct_sender_fn, args=(sif_acct, tx_stub, reqs)))
 
-    # Get initial balances
-    eth_balances_before = [ctx.eth.get_eth_balance(eth_acct) for eth_acct in eth_accts]
-    sif_balances_before = [ctx.get_sifchain_balance(x) for x in sif_accts]
+    # Get initial balances. The balances should not have been changed by now.
+    sif_balances_before = [ctx.get_sifchain_balance(x) for x in sif_accts]  # Assert == sif_balances_initial (for rowan)
+    assert all([ctx.eth.get_eth_balance(eth_accts[i]) == eth_balances_initial[i] for i in range(n_eth)])  # Assert == eth_balances_initial
+    assert all([ctx.get_sifchain_balance(sif_accts[i])[rowan] == sif_balances_before[i][rowan] for i in range(n_sif)])
 
     # Broadcast transactions
     start_time = time.time()
@@ -147,6 +170,9 @@ def _test_eth_to_ceth_and_back_grpc(ctx, amount_per_tx, transfer_table, randomiz
     for c in channels:
         c.close()
 
+    avg_tx_fees = [(ctx.get_sifchain_balance(sif_accts[i])[rowan] - sif_balances_before[i][rowan]) / sum_sif[i] for i in range(n_sif)]
+    log.debug("Average used fee per transaction: {}".format(repr(avg_tx_fees)))
+
     # Wait for eth balances
     start_time = time.time()
     last_change_time = None
@@ -155,7 +181,7 @@ def _test_eth_to_ceth_and_back_grpc(ctx, amount_per_tx, transfer_table, randomiz
     cumulative_timeout = sum_all * 10  # Equivalent to min rate of 0.1 tps
     while True:
         eth_balances = [ctx.eth.get_eth_balance(eth_acct) for eth_acct in eth_accts]
-        balance_delta = sum([eth_balances[i] - eth_balances_before[i] for i in range(n_eth)])
+        balance_delta = sum([eth_balances[i] - eth_balances_initial[i] for i in range(n_eth)])
         now = time.time()
         total = sum_all * amount_per_tx
         still_to_go = total - balance_delta
@@ -206,13 +232,3 @@ if __name__ == "__main__":
     from siftool import test_utils
     ctx = test_utils.get_env_ctx()
     test_eth_to_ceth_and_back_grpc(ctx)
-
-
-# python (probably from grpc):
-# E0326 11:41:27.125006742  636480 fork_posix.cc:70]           Fork support is only compatible with the epoll1 and poll polling strategies
-# Maybe: https://github.com/grpc/grpc/issues/29044
-
-
-# sifnoded.log:
-# {"level":"debug","module":"mempool","height":348,"res":{"check_tx":{"code":0,"data":"","log":"[]","info":"","gas_wanted":"1000000000000000000","gas_used":"51653","events":[],"codespace":""}},"total":1,"tx":"\ufffd\ufffd\u0013\ufffd3\ufffd\u0014\ufffd\ufffd\ufffd\u001e\u0016R\ufffd\ufffd\ufffd,q$Z\u0006\tN0\ufffd萈\ufffdV\ufffdy","time":"2022-03-26T10:07:48+01:00","message":"added good transaction"}
-# {"level":"debug","module":"mempool","err":null,"peerID":"","res":{"check_tx":{"code":5,"data":null,"log":"0rowan is smaller than 500000000000000000rowan: insufficient funds: insufficient funds","info":"","gas_wanted":"1000000000000000000","gas_used":"19773","events":[],"codespace":"sdk"}},"tx":"H\ufffd\ufffdx\ufffd,4\u0004\ufffd\u001fWSnn\ufffd\ufffd\ufffdp\ufffd\ufffdg\ufffdGں^\ufffd\ufffd*i\ufffdX","time":"2022-03-26T10:09:26+01:00","message":"rejected bad transaction"}
