@@ -153,8 +153,9 @@ def _test_eth_to_ceth_and_back_grpc(ctx, amount_per_tx, transfer_table, randomiz
         still_to_go = total - balance_delta
         pct_done = balance_delta / total * 100
         txns_done = balance_delta / amount_per_tx
+        time_elapsed = time.time() - start_time
         log.debug("Test progress: {} / {} ({:.9f} txns done, {:.9f}%, {:.2f} avg tps)".format(balance_delta, total,
-            txns_done, pct_done, ((time.time() - start_time) / txns_done if balance_delta > 0 else 0)))
+            txns_done, pct_done, (txns_done / time_elapsed if time_elapsed > 0 else 0)))
         if still_to_go == 0:
             break
         if time.time() - start_time > 3600:
