@@ -26,7 +26,7 @@ import cosmos.tx.v1beta1.service_pb2_grpc as cosmos_tx_grpc
 
 
 # Fees for "ethbridge burn" transactions. Determined experimentally
-sif_tx_burn_fee_in_rowan = 100000 * 1000
+sif_tx_burn_fee_in_rowan = 100000
 sif_tx_burn_fee_in_ceth = 1
 
 # There seems to be a minimum amount of rowan that a sif account needs to own in order for the bridge to do an
@@ -199,12 +199,12 @@ def _test_eth_to_ceth_and_back_grpc(ctx, amount_per_tx, transfer_table, randomiz
         time_elapsed = time.time() - start_time
         log.debug("Test progress: {} / {} ({:.9f} txns done, {:.2f}%, {:.4f} avg tps)".format(balance_delta, total,
             txns_done, pct_done, (txns_done / time_elapsed if time_elapsed > 0 else 0)))
-        if still_to_go == 0:
-            break
         if (last_change is None) or (balance_delta != last_change):
             last_change_time = now
             last_change = balance_delta
             log.debug("sif_accts balances: {}".format(repr([ctx.get_sifchain_balance(x) for x in sif_accts])))
+        if still_to_go == 0:
+            break
         if now - last_change_time > last_change_timeout:
             raise Exception("Last change timeout exceeded")
         elif now - start_time > cumulative_timeout:
@@ -214,8 +214,8 @@ def _test_eth_to_ceth_and_back_grpc(ctx, amount_per_tx, transfer_table, randomiz
     # Verify final sif balances. There should be no ceth left. There is some rowan left since we oversupplied it.
     for sif_acct in sif_accts:
         actual_balance = ctx.get_sifchain_balance(sif_acct)
-        # assert siftool.cosmos.balance_zero(actual_balance)
         assert actual_balance.get(ctx.ceth_symbol, 0) == 0
+        assert actual_balance.get(rowan, 0) == sif_tx_burn_fee_buffer_in_rowan
 
     # Verify final eth balances
     for i, eth_acct in enumerate(eth_accts):
