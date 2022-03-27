@@ -23,12 +23,19 @@ import cosmos.tx.v1beta1.service_pb2_grpc as cosmos_tx_grpc
 
 # sifnoded.log:
 # {"level":"debug","module":"mempool","height":348,"res":{"check_tx":{"code":0,"data":"","log":"[]","info":"","gas_wanted":"1000000000000000000","gas_used":"51653","events":[],"codespace":""}},"total":1,"tx":"\ufffd\ufffd\u0013\ufffd3\ufffd\u0014\ufffd\ufffd\ufffd\u001e\u0016R\ufffd\ufffd\ufffd,q$Z\u0006\tN0\ufffd萈\ufffdV\ufffdy","time":"2022-03-26T10:07:48+01:00","message":"added good transaction"}
-# {"level":"debug","module":"mempool","err":null,"peerID":"","res":{"check_tx":{"code":5,"data":null,"log":"0rowan is smaller than 500000000000000000rowan: insufficient funds: insufficient funds","info":"","gas_wanted":"1000000000000000000","gas_used":"19773","events":[],"codespace":"sdk"}},"tx":"H\ufffd\ufffdx\ufffd,4\u0004\ufffd\u001fWSnn\ufffd\ufffd\ufffdp\ufffd\ufffdg\ufffdGں^\ufffd\ufffd*i\ufffdX","time":"2022-03-26T10:09:26+01:00","message":"rejected bad transaction"}
 
 
 # Fees for "ethbridge burn" transactions. Determined experimentally
 sif_tx_burn_fee_in_rowan = 100000 * 1000
 sif_tx_burn_fee_in_ceth = 1
+
+# There seems to be a minimum amount of rowan that a sif account needs to own in order for the bridge to do an
+# "ethbridge burn". This amount does not seem to be actually used. For example, if you fund the account just with
+# sif_tx_burn_fee_in_rowan, We observed that if you try to fund sif accounts with just the exact amount of rowan
+# needed to pay fees (sif_tx_burn_fee_in_rowan * number_of_transactions), the bridge would stop forwarding after
+# approx. 200 transactions, and you would see in sifnoded logs this message:
+# {"level":"debug","module":"mempool","err":null,"peerID":"","res":{"check_tx":{"code":5,"data":null,"log":"0rowan is smaller than 500000000000000000rowan: insufficient funds: insufficient funds","info":"","gas_wanted":"1000000000000000000","gas_used":"19773","events":[],"codespace":"sdk"}},"tx":"H\ufffd\ufffdx\ufffd,4\u0004\ufffd\u001fWSnn\ufffd\ufffd\ufffdp\ufffd\ufffdg\ufffdGں^\ufffd\ufffd*i\ufffdX","time":"2022-03-26T10:09:26+01:00","message":"rejected bad transaction"}
+sif_tx_burn_fee_buffer_in_rowan = 5 * 10**17
 
 # Fees for sifchain -> sifchain transactions, paid by the sender.
 sif_tx_fee_in_rowan = 1 * 10**17
@@ -65,8 +72,10 @@ def _test_eth_to_ceth_and_back_grpc(ctx, amount_per_tx, transfer_table, randomiz
 
     # Create n_sif test sif accounts.
     # Each sif account needs sif_tx_burn_fee_in_rowan * rowan + sif_tx_burn_fee_in_ceth ceth for every transaction.
+    # Theoretically, we could fund accounts with ceth here, but in a strict sense this would violate the balance sheets
+    # (i.e. there might be an attempt to unlock ETH in the bridge bank without enough locked ETH available).
     sif_acct_funds = [{
-        rowan: sif_tx_burn_fee_in_rowan * n,
+        rowan: sif_tx_burn_fee_in_rowan * n + sif_tx_burn_fee_buffer_in_rowan,
         # ctx.ceth_symbol: sif_tx_burn_fee_in_ceth * n
     } for n in sum_sif]
     sif_accts = [ctx.create_sifchain_addr(fund_amounts=f) for f in sif_acct_funds]
