@@ -27,7 +27,7 @@ import cosmos.tx.v1beta1.service_pb2_grpc as cosmos_tx_grpc
 
 
 # Fees for "ethbridge burn" transactions. Determined experimentally
-sif_tx_burn_fee_in_rowan = 100000
+sif_tx_burn_fee_in_rowan = 100000 * 1000
 sif_tx_burn_fee_in_ceth = 1
 
 # Fees for sifchain -> sifchain transactions, paid by the sender.
@@ -170,7 +170,7 @@ def _test_eth_to_ceth_and_back_grpc(ctx, amount_per_tx, transfer_table, randomiz
     for c in channels:
         c.close()
 
-    avg_tx_fees = [(ctx.get_sifchain_balance(sif_accts[i])[rowan] - sif_balances_before[i][rowan]) / sum_sif[i] for i in range(n_sif)]
+    avg_tx_fees = [(sif_balances_before[i].get(rowan, 0) - ctx.get_sifchain_balance(sif_accts[i]).get(rowan, 0)) / sum_sif[i] for i in range(n_sif)]
     log.debug("Average used fee per transaction: {}".format(repr(avg_tx_fees)))
 
     # Wait for eth balances
