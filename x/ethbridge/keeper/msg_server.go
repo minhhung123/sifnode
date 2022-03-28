@@ -192,6 +192,17 @@ func (srv msgServer) Burn(goCtx context.Context, msg *types.MsgBurn) (*types.Msg
 		),
 	})
 
+	instrumentation.PeggyCheckpoint(logger,
+		"CosmosBurnMessageSubmitted",
+		"event", zap.Reflect("cosmosevent", sdk.NewEvent(
+			types.EventTypeBurn,
+			sdk.NewAttribute(types.AttributeKeyNetworkDescriptor, strconv.FormatInt(int64(msg.NetworkDescriptor), 10)),
+			sdk.NewAttribute(types.AttributeKeyProphecyID, string(prophecyID[:])),
+			sdk.NewAttribute(types.AttributeKeyGlobalSequence, strconv.FormatInt(int64(globalSequence), 10)),
+		)),
+		"prophecyId", string(prophecyID[:]),
+		"GlobalSequence", globalSequence,
+	)
 	return &types.MsgBurnResponse{}, nil
 }
 
