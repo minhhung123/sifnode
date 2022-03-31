@@ -2,12 +2,14 @@ package keeper_test
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	sifapp "github.com/Sifchain/sifnode/app"
 	clpkeeper "github.com/Sifchain/sifnode/x/clp/keeper"
 	tokenregistrytypes "github.com/Sifchain/sifnode/x/tokenregistry/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/cosmos/cosmos-sdk/types/query"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	"github.com/stretchr/testify/require"
 
@@ -218,6 +220,166 @@ func TestMsgServer_DecommissionPool(t *testing.T) {
 			}
 			require.NoError(t, err)
 		})
+	}
+}
+
+// This is a hack to chase a bug - this won't make it into develop
+func TestMsgServer_SwapDecGT18(t *testing.T) {
+	testcases := []struct {
+		name                   string
+		createBalance          bool
+		createPool             bool
+		createLPs              bool
+		poolAsset              string
+		address                string
+		nativeBalance          sdk.Int
+		externalBalance        sdk.Int
+		nativeAssetAmount      sdk.Uint
+		externalAssetAmount    sdk.Uint
+		poolUnits              sdk.Uint
+		poolAssetPermissions   []tokenregistrytypes.Permission
+		nativeAssetPermissions []tokenregistrytypes.Permission
+		msg                    *types.MsgSwap
+		err                    error
+		errString              error
+	}{
+
+		{
+			name:                   "correct amount when decimals > 18 on external asset",
+			createBalance:          true,
+			createPool:             true,
+			createLPs:              true,
+			poolAsset:              "decvar",
+			address:                "sif1syavy2npfyt9tcncdtsdzf7kny9lh777yqc2nd",
+			nativeBalance:          sdk.NewInt(2000000000000000000), // we'll give away half to the module (can't find a way to initialize module balance)
+			externalBalance:        sdk.NewInt(1000000000000000000),
+			nativeAssetAmount:      sdk.NewUint(1000000000000000000),
+			externalAssetAmount:    sdk.NewUint(1000000000000000000),
+			poolUnits:              sdk.NewUint(1000000000000000000),
+			poolAssetPermissions:   []tokenregistrytypes.Permission{tokenregistrytypes.Permission_CLP},
+			nativeAssetPermissions: []tokenregistrytypes.Permission{tokenregistrytypes.Permission_CLP},
+			msg: &types.MsgSwap{
+				Signer:             "sif1syavy2npfyt9tcncdtsdzf7kny9lh777yqc2nd",
+				SentAsset:          &types.Asset{Symbol: "decvar"},
+				ReceivedAsset:      &types.Asset{Symbol: "rowan"},
+				SentAmount:         sdk.NewUint(30),
+				MinReceivingAmount: sdk.NewUint(0),
+			},
+		},
+	}
+
+	for _, tc := range testcases {
+		tc := tc
+
+		decimalsTest := []int64{10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21}
+
+		for _, decimals := range decimalsTest {
+			fmt.Println("=======================================")
+			fmt.Printf("Decimals: %d\n", decimals)
+			t.Run(tc.name, func(t *testing.T) {
+				ctx, app := test.CreateTestAppClpFromGenesis(false, func(app *sifapp.SifchainApp, genesisState sifapp.GenesisState) sifapp.GenesisState {
+					trGs := &tokenregistrytypes.GenesisState{
+						AdminAccount: tc.address,
+						Registry: &tokenregistrytypes.Registry{
+							Entries: []*tokenregistrytypes.RegistryEntry{
+								{Denom: tc.poolAsset, BaseDenom: tc.poolAsset, Decimals: decimals, Permissions: tc.poolAssetPermissions},
+								{Denom: "rowan", BaseDenom: "rowan", Decimals: 18, Permissions: tc.nativeAssetPermissions},
+							},
+						},
+					}
+					bz, _ := app.AppCodec().MarshalJSON(trGs)
+					genesisState["tokenregistry"] = bz
+
+					if tc.createBalance {
+						balances := []banktypes.Balance{
+							{
+								Address: tc.address,
+								Coins: sdk.Coins{
+									sdk.NewCoin(tc.poolAsset, tc.externalBalance),
+									sdk.NewCoin("rowan", tc.nativeBalance),
+								},
+							},
+						}
+
+						bankGs := banktypes.DefaultGenesisState()
+						bankGs.Balances = append(bankGs.Balances, balances...)
+						bz, _ = app.AppCodec().MarshalJSON(bankGs)
+						genesisState["bank"] = bz
+					}
+
+					if tc.createPool {
+						pools := []*types.Pool{
+							{
+								ExternalAsset:        &types.Asset{Symbol: tc.poolAsset},
+								NativeAssetBalance:   tc.nativeAssetAmount,
+								ExternalAssetBalance: tc.externalAssetAmount,
+								PoolUnits:            tc.poolUnits,
+							},
+						}
+						clpGs := types.DefaultGenesisState()
+						if tc.createLPs {
+							lps := []*types.LiquidityProvider{
+								{
+									Asset:                    &types.Asset{Symbol: tc.poolAsset},
+									LiquidityProviderAddress: tc.address,
+									LiquidityProviderUnits:   tc.nativeAssetAmount,
+								},
+							}
+							clpGs.LiquidityProviders = append(clpGs.LiquidityProviders, lps...)
+						}
+						clpGs.Params = types.Params{
+							MinCreatePoolThreshold:   100,
+							PmtpPeriodGovernanceRate: sdk.OneDec(),
+							PmtpPeriodEpochLength:    1,
+							PmtpPeriodStartBlock:     1,
+							PmtpPeriodEndBlock:       2,
+						}
+						clpGs.AddressWhitelist = append(clpGs.AddressWhitelist, tc.address)
+						clpGs.PoolList = append(clpGs.PoolList, pools...)
+						bz, _ = app.AppCodec().MarshalJSON(clpGs)
+						genesisState["clp"] = bz
+					}
+
+					return genesisState
+				})
+
+				addr, err := sdk.AccAddressFromBech32(tc.address)
+				require.NoError(t, err)
+
+				err = app.BankKeeper.SendCoinsFromAccountToModule(ctx, addr, "clp", sdk.NewCoins(sdk.NewCoin("rowan", sdk.NewInt(1000000000000000000))))
+				require.NoError(t, err)
+
+				app.ClpKeeper.SetPmtpCurrentRunningRate(ctx, sdk.NewDec(1))
+
+				msgServer := clpkeeper.NewMsgServerImpl(app.ClpKeeper)
+
+				_, err = msgServer.Swap(sdk.WrapSDKContext(ctx), tc.msg)
+
+				if tc.errString != nil {
+					require.EqualError(t, err, tc.errString.Error())
+					return
+				}
+				if tc.err != nil {
+					require.ErrorIs(t, err, tc.err)
+					return
+				}
+				require.NoError(t, err)
+
+				allBalanceRequest := banktypes.QueryAllBalancesRequest{
+					Address:    tc.address,
+					Pagination: &query.PageRequest{},
+				}
+				allBalanceResponse, err := app.BankKeeper.AllBalances(sdk.WrapSDKContext(ctx), &allBalanceRequest)
+				if err != nil {
+					t.Fatalf("err: %v", err)
+				}
+
+				balances := allBalanceResponse.GetBalances()
+				fmt.Printf("Balances: %s\n", balances)
+
+			})
+
+		}
 	}
 }
 

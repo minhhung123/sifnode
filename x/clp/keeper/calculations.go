@@ -288,6 +288,8 @@ func CalcSwapResult(toRowan bool,
 		return sdk.ZeroUint(), nil
 	}
 
+	fmt.Printf("X: %s\nx: %s\nY: %s\nnf: %s\nadjust: %v\n", X.String(), x.String(), Y.String(), normalizationFactor.String(), adjustExternalToken)
+
 	nf := sdk.NewUintFromBigInt(normalizationFactor.RoundInt().BigInt())
 	if adjustExternalToken {
 		if toRowan {
@@ -317,6 +319,7 @@ func CalcSwapResult(toRowan bool,
 	if !toRowan {
 		y = y.Quo(normalizationFactor)
 	}
+	fmt.Printf("y: %s\n", y.String())
 	y = CalcSwapPmtp(toRowan, y, pmtpCurrentRunningRate)
 	return sdk.NewUintFromBigInt(y.RoundInt().BigInt()), nil
 }
