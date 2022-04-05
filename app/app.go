@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	sifchainAnte "github.com/Sifchain/sifnode/app/ante"
 	"github.com/Sifchain/sifnode/x/clp"
@@ -106,9 +107,23 @@ import (
 	"github.com/tendermint/tendermint/libs/log"
 	tmos "github.com/tendermint/tendermint/libs/os"
 	dbm "github.com/tendermint/tm-db"
+
+	"github.com/CosmWasm/wasmd/x/wasm"
+	wasmclient "github.com/CosmWasm/wasmd/x/wasm/client"
+	wasmkeeper "github.com/CosmWasm/wasmd/x/wasm/keeper"
+	"github.com/prometheus/client_golang/prometheus"
+
 )
 
 const appName = "sifnode"
+
+func GetWasmOpts(appOpts servertypes.AppOptions) []wasm.Option {
+	var wasmOpts []wasm.Option
+	if cast.ToBool(appOpts.Get("telemetry.enabled")) {
+		wasmOpts = append(wasmOpts, wasmkeeper.WithVMCacheMetrics(prometheus.DefaultRegisterer))
+	}
+	wasmOpts = append(wasmOpts, wasmkeeper.WithGasRegister())
+}
 
 var (
 	DefaultNodeHome = os.ExpandEnv("$HOME/.sifnoded")
@@ -143,6 +158,8 @@ var (
 		dispensation.AppModuleBasic{},
 		tokenregistry.AppModuleBasic{},
 		vesting.AppModuleBasic{},
+		// Add wasm module
+		wasm.AppModuleBasic{},
 	)
 
 	maccPerms = map[string][]string{
@@ -157,6 +174,7 @@ var (
 		ethbridgetypes.ModuleName:      {authtypes.Minter, authtypes.Burner},
 		clptypes.ModuleName:            {authtypes.Burner, authtypes.Minter},
 		dispensation.ModuleName:        {authtypes.Burner, authtypes.Minter},
+		wasm.ModuleName:                {authtypes.Burner},
 	}
 )
 
@@ -218,6 +236,10 @@ type SifchainApp struct {
 	mm           *module.Manager
 	sm           *module.SimulationManager
 	configurator module.Configurator
+
+	// Add wasm
+	wasmKeeper          wasm.Keeper
+	scopedWasmKeeper    capabilitykeeper.ScopedKeeper
 }
 
 func NewSifApp(
@@ -252,6 +274,7 @@ func NewSifApp(
 		clptypes.StoreKey,
 		oracletypes.StoreKey,
 		tokenregistrytypes.StoreKey,
+		wasm.StoreKey,
 	)
 	tkeys := sdk.NewTransientStoreKeys(paramstypes.TStoreKey)
 	memKeys := sdk.NewMemoryStoreKeys(capabilitytypes.MemStoreKey)
@@ -280,6 +303,8 @@ func NewSifApp(
 	// NOTE: the IBC mock keeper and application module is used only for testing core IBC. Do
 	// note replicate if you do not need to test core IBC or light clients.
 	scopedIBCMockKeeper := app.CapabilityKeeper.ScopeToModule(ibcmock.ModuleName)
+
+	scopedWasmKeeper := app.CapabilityKeeper.ScopeToModule(wasm.ModuleName)
 
 	app.AccountKeeper = authkeeper.NewAccountKeeper(
 		appCodec,
@@ -427,6 +452,16 @@ func NewSifApp(
 	)
 	// If evidence needs to be handled for the app, set routes in router here and seal
 	app.EvidenceKeeper = *evidenceKeeper
+
+	wasmDir := filepath.Join(homePath, "data")
+
+	wasmConfig, err := wasm.ReadWasmConfig(appOpts)
+	if err != nil {
+		panic("error while reading wasm config: " + err.Error())
+	}
+	supportedFeatures := "iterator,staking,stargate"
+	wasmOpts := GetWasmOpts(appOpts)
+
 	cfg := module.NewConfigurator(app.appCodec, app.MsgServiceRouter(), app.GRPCQueryRouter())
 	app.configurator = cfg
 
