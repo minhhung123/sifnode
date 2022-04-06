@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -248,18 +249,31 @@ func newApp(
 	)
 }
 
-func createSimappAndExport(logger log.Logger, db dbm.DB, traceStore io.Writer, height int64, forZeroHeight bool,
-	jailAllowedAddrs []string, appOpts servertypes.AppOptions) (servertypes.ExportedApp, error) {
+func createSimappAndExport(
+	logger log.Logger,
+	db dbm.DB, 
+	traceStore io.Writer, 
+	height int64, 
+	forZeroHeight bool,
+	jailAllowedAddrs []string, 
+	appOpts servertypes.AppOptions,
+) (servertypes.ExportedApp, error) {
 	encCfg := app.MakeTestEncodingConfig() // Ideally, we would reuse the one created by NewRootCmd.
 	encCfg.Marshaler = codec.NewProtoCodec(encCfg.InterfaceRegistry)
 	var sifApp *app.SifchainApp
+
+	homePath, ok := appOpts.Get(flags.FlagHome).(string)
+	if !ok || homePath == "" {
+		return servertypes.ExportedApp{}, errors.New("application home not set")
+	}
+
 	if height != -1 {
-		sifApp = app.NewSifApp(logger, db, traceStore, false, map[int64]bool{}, "", cast.ToUint(appOpts.Get(server.FlagInvCheckPeriod)), encCfg, appOpts)
+		sifApp = app.NewSifApp(logger, db, traceStore, false, map[int64]bool{}, homePath, cast.ToUint(appOpts.Get(server.FlagInvCheckPeriod)), encCfg, appOpts)
 		if err := sifApp.LoadHeight(height); err != nil {
 			return servertypes.ExportedApp{}, err
 		}
 	} else {
-		sifApp = app.NewSifApp(logger, db, traceStore, true, map[int64]bool{}, "", cast.ToUint(appOpts.Get(server.FlagInvCheckPeriod)), encCfg, appOpts)
+		sifApp = app.NewSifApp(logger, db, traceStore, true, map[int64]bool{}, homePath, cast.ToUint(appOpts.Get(server.FlagInvCheckPeriod)), encCfg, appOpts)
 	}
 	return sifApp.ExportAppStateAndValidators(forZeroHeight, jailAllowedAddrs)
 }
