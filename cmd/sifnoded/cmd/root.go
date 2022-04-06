@@ -33,7 +33,53 @@ import (
 	"github.com/Sifchain/sifnode/app"
 )
 
-func NewRootCmd() (*cobra.Command, params.EncodingConfig) {
+// Option configures root command option.
+type Option func(*rootOptions)
+
+// scaffoldingOptions keeps set of options to apply scaffolding.
+type rootOptions struct {
+	addSubCmds         []*cobra.Command
+	startCmdCustomizer func(*cobra.Command)
+	envPrefix          string
+}
+
+func newRootOptions(options ...Option) rootOptions {
+	opts := rootOptions{}
+	opts.apply(options...)
+	return opts
+}
+
+func (s *rootOptions) apply(options ...Option) {
+	for _, o := range options {
+		o(s)
+	}
+}
+
+// AddSubCmd adds sub commands.
+func AddSubCmd(cmd ...*cobra.Command) Option {
+	return func(o *rootOptions) {
+		o.addSubCmds = append(o.addSubCmds, cmd...)
+	}
+}
+
+// CustomizeStartCmd accepts a handler to customize the start command.
+func CustomizeStartCmd(h func(startCmd *cobra.Command)) Option {
+	return func(o *rootOptions) {
+		o.startCmdCustomizer = h
+	}
+}
+
+// WithEnvPrefix accepts a new prefix for environment variables.
+func WithEnvPrefix(envPrefix string) Option {
+	return func(o *rootOptions) {
+		o.envPrefix = envPrefix
+	}
+}
+
+
+func NewRootCmd(options ...Option) (*cobra.Command, params.EncodingConfig) {
+	rootOptions := newRootOptions(options...)
+
 	encodingConfig := app.MakeTestEncodingConfig()
 	initClientCtx := client.Context{}.
 		WithCodec(encodingConfig.Marshaler).
@@ -44,7 +90,7 @@ func NewRootCmd() (*cobra.Command, params.EncodingConfig) {
 		WithAccountRetriever(types.AccountRetriever{}).
 		WithBroadcastMode(flags.BroadcastBlock).
 		WithHomeDir(app.DefaultNodeHome).
-		WithViper("")
+		WithViper(rootOptions.envPrefix)
 	rootCmd := &cobra.Command{
 		Use:   "sifnoded",
 		Short: "app Daemon (server)",
