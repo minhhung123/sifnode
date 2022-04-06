@@ -110,11 +110,11 @@ func NewRootCmd(options ...Option) (*cobra.Command, params.EncodingConfig) {
 			return server.InterceptConfigsPreRunHandler(cmd, "", nil)
 		},
 	}
-	initRootCmd(rootCmd, encodingConfig)
+	initRootCmd(rootCmd, encodingConfig, rootOptions)
 	return rootCmd, encodingConfig
 }
 
-func initRootCmd(rootCmd *cobra.Command, encodingConfig params.EncodingConfig) {
+func initRootCmd(rootCmd *cobra.Command, encodingConfig params.EncodingConfig, options rootOptions) {
 	rootCmd.AddCommand(
 		genutilcli.InitCmd(app.ModuleBasics, app.DefaultNodeHome),
 		genutilcli.CollectGenTxsCmd(banktypes.GenesisBalancesIterator{}, app.DefaultNodeHome),
@@ -132,7 +132,19 @@ func initRootCmd(rootCmd *cobra.Command, encodingConfig params.EncodingConfig) {
 		debug.Cmd(),
 		NewIBCDiagCmd(),
 	)
-	server.AddCommands(rootCmd, app.DefaultNodeHome, newApp, createSimappAndExport, addModuleInitFlags)
+	server.AddCommands(
+		rootCmd,
+		app.DefaultNodeHome, 
+		newApp, 
+		createSimappAndExport, 
+		func(cmd *cobra.Command) {
+			addModuleInitFlags(cmd)
+
+			if options.startCmdCustomizer != nil {
+				options.startCmdCustomizer(cmd)
+			}
+		},
+	)
 	// add keybase, auxiliary RPC, query, and tx child commands
 	rootCmd.AddCommand(
 		rpc.StatusCommand(),
@@ -140,6 +152,9 @@ func initRootCmd(rootCmd *cobra.Command, encodingConfig params.EncodingConfig) {
 		txCommand(),
 		keys.Commands(app.DefaultNodeHome),
 	)
+	for _, cmd := range options.addSubCmds {
+		rootCmd.AddCommand(cmd)
+	}
 }
 
 func addModuleInitFlags(startCmd *cobra.Command) {
@@ -192,7 +207,12 @@ func txCommand() *cobra.Command {
 }
 
 // newApp is an AppCreator
-func newApp(logger log.Logger, db dbm.DB, traceStore io.Writer, appOpts servertypes.AppOptions) servertypes.Application {
+func newApp(
+	logger log.Logger, 
+	db dbm.DB, 
+	traceStore io.Writer, 
+	appOpts servertypes.AppOptions,
+) servertypes.Application {
 	var cache sdk.MultiStorePersistentCache
 	if cast.ToBool(appOpts.Get(server.FlagInterBlockCache)) {
 		cache = store.NewCommitKVStoreCacheManager()

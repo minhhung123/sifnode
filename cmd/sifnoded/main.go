@@ -11,7 +11,8 @@ import (
 )
 
 func main() {
-	rootCmd, _ := cmd.NewRootCmd()
+	cmdOptions := GetWasmCmdOptions()
+	rootCmd, _ := cmd.NewRootCmd(cmdOptions...)
 
 	app.SetConfig(true)
 
