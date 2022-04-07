@@ -34,3 +34,6 @@ sifnoded collect-gentxs
 
 echo "Validating genesis file..."
 sifnoded validate-genesis
+
+
+
